@@ -468,7 +468,7 @@ class MqttClimate(MqttAvailability, MqttDiscoveryUpdate, ClimateDevice):
             topics[CONF_STATE_TOPIC] = {
                 'topic': self._topic[CONF_STATE_TOPIC],
                 'msg_callback': handle_state_received,
-                'qos': self._qos}
+                'qos': qos}
 
         self._sub_state = await subscription.async_subscribe_topics(
             self.hass, self._sub_state,
