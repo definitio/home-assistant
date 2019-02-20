@@ -701,7 +701,8 @@ async def test_setting_attribute_via_mqtt_json_message(hass, mqtt_mock):
         climate.DOMAIN: {
             'platform': 'mqtt',
             'name': 'test',
-            'state_topic': 'test-topic',
+            'power_state_topic': 'test-topic',
+            'power_command_topic': 'test_topic',
             'json_attributes_topic': 'attr-topic'
         }
     })
@@ -719,7 +720,8 @@ async def test_update_with_json_attrs_not_dict(hass, mqtt_mock, caplog):
         climate.DOMAIN: {
             'platform': 'mqtt',
             'name': 'test',
-            'state_topic': 'test-topic',
+            'power_state_topic': 'test-topic',
+            'power_command_topic': 'test_topic',
             'json_attributes_topic': 'attr-topic'
         }
     })
@@ -738,7 +740,8 @@ async def test_update_with_json_attrs_bad_JSON(hass, mqtt_mock, caplog):
         climate.DOMAIN: {
             'platform': 'mqtt',
             'name': 'test',
-            'state_topic': 'test-topic',
+            'power_state_topic': 'test-topic',
+            'power_command_topic': 'test_topic',
             'json_attributes_topic': 'attr-topic'
         }
     })
@@ -757,12 +760,14 @@ async def test_discovery_update_attr(hass, mqtt_mock, caplog):
     await async_start(hass, 'homeassistant', {}, entry)
     data1 = (
         '{ "name": "Beer",'
-        '  "command_topic": "test_topic",'
+        '  "power_state_topic": "test-topic",'
+        '  "power_command_topic": "test_topic",'
         '  "json_attributes_topic": "attr-topic1" }'
     )
     data2 = (
         '{ "name": "Beer",'
-        '  "command_topic": "test_topic",'
+        '  "power_state_topic": "test-topic",'
+        '  "power_command_topic": "test_topic",'
         '  "json_attributes_topic": "attr-topic2" }'
     )
     async_fire_mqtt_message(hass, 'homeassistant/climate/bla/config',
@@ -802,14 +807,14 @@ async def test_unique_id(hass):
         climate.DOMAIN: [{
             'platform': 'mqtt',
             'name': 'Test 1',
-            'status_topic': 'test-topic',
-            'command_topic': 'test_topic',
+            'power_state_topic': 'test-topic',
+            'power_command_topic': 'test_topic',
             'unique_id': 'TOTALLY_UNIQUE'
         }, {
             'platform': 'mqtt',
             'name': 'Test 2',
-            'status_topic': 'test-topic',
-            'command_topic': 'test_topic',
+            'power_state_topic': 'test-topic',
+            'power_command_topic': 'test_topic',
             'unique_id': 'TOTALLY_UNIQUE'
         }]
     })
@@ -913,8 +918,6 @@ async def test_entity_device_info_with_identifier(hass, mqtt_mock):
     data = json.dumps({
         'platform': 'mqtt',
         'name': 'Test 1',
-        'state_topic': 'test-topic',
-        'command_topic': 'test-topic',
         'device': {
             'identifiers': ['helloworld'],
             'connections': [
@@ -952,8 +955,8 @@ async def test_entity_device_info_update(hass, mqtt_mock):
     config = {
         'platform': 'mqtt',
         'name': 'Test 1',
-        'state_topic': 'test-topic',
-        'command_topic': 'test-command-topic',
+        'power_state_topic': 'test-topic',
+        'power_command_topic': 'test-command-topic',
         'device': {
             'identifiers': ['helloworld'],
             'connections': [
