@@ -5,8 +5,9 @@ from homeassistant.components.cover import (
 from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-from .const import COVER_TYPES, DAMPERS, DOMAIN as DECONZ_DOMAIN, WINDOW_COVERS
+from .const import COVER_TYPES, DAMPERS, NEW_LIGHT, WINDOW_COVERS
 from .deconz_device import DeconzDevice
+from .gateway import get_gateway_from_config_entry
 
 DEPENDENCIES = ['deconz']
 
@@ -24,22 +25,26 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
     Covers are based on same device class as lights in deCONZ.
     """
-    gateway = hass.data[DECONZ_DOMAIN]
+    gateway = get_gateway_from_config_entry(hass, config_entry)
 
     @callback
     def async_add_cover(lights):
         """Add cover from deCONZ."""
         entities = []
+
         for light in lights:
+
             if light.type in COVER_TYPES:
                 if light.modelid in ZIGBEE_SPEC:
                     entities.append(DeconzCoverZigbeeSpec(light, gateway))
+
                 else:
                     entities.append(DeconzCover(light, gateway))
+
         async_add_entities(entities, True)
 
-    gateway.listeners.append(
-        async_dispatcher_connect(hass, 'deconz_new_light', async_add_cover))
+    gateway.listeners.append(async_dispatcher_connect(
+        hass, gateway.async_event_new_device(NEW_LIGHT), async_add_cover))
 
     async_add_cover(gateway.api.lights.values())
 
@@ -48,7 +53,7 @@ class DeconzCover(DeconzDevice, CoverDevice):
     """Representation of a deCONZ cover."""
 
     def __init__(self, device, gateway):
-        """Set up cover and add update callback to get data from websocket."""
+        """Set up cover device."""
         super().__init__(device, gateway)
 
         self._features = SUPPORT_OPEN
