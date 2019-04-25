@@ -19,6 +19,7 @@ from homeassistant.components import (
 from homeassistant.components.climate import const as climate
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    ATTR_DEVICE_CLASS,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_LOCKED,
@@ -29,11 +30,20 @@ from homeassistant.const import (
     ATTR_SUPPORTED_FEATURES,
     ATTR_TEMPERATURE,
     ATTR_ASSUMED_STATE,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import DOMAIN as HA_DOMAIN
 from homeassistant.util import color as color_util, temperature as temp_util
-from .const import ERR_VALUE_OUT_OF_RANGE
-from .helpers import SmartHomeError
+from .const import (
+    ERR_VALUE_OUT_OF_RANGE,
+    ERR_NOT_SUPPORTED,
+    ERR_FUNCTION_NOT_SUPPORTED,
+    ERR_CHALLENGE_NOT_SETUP,
+    CHALLENGE_ACK_NEEDED,
+    CHALLENGE_PIN_NEEDED,
+    CHALLENGE_FAILED_PIN_NEEDED,
+)
+from .error import SmartHomeError, ChallengeNeeded
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -109,7 +119,7 @@ class _Trait:
         """Test if command can be executed."""
         return command in self.commands
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute a trait command."""
         raise NotImplementedError
 
@@ -159,7 +169,7 @@ class BrightnessTrait(_Trait):
 
         return response
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute a brightness command."""
         domain = self.state.domain
 
@@ -214,7 +224,7 @@ class CameraStreamTrait(_Trait):
         """Return camera stream attributes."""
         return self.stream_info or {}
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute a get camera stream command."""
         url = await self.hass.components.camera.async_request_stream(
             self.state.entity_id, 'hls')
@@ -255,7 +265,7 @@ class OnOffTrait(_Trait):
         """Return OnOff query attributes."""
         return {'on': self.state.state != STATE_OFF}
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute an OnOff command."""
         domain = self.state.domain
 
@@ -300,17 +310,19 @@ class ColorSettingTrait(_Trait):
         response = {}
 
         if features & light.SUPPORT_COLOR:
-            response['colorModel'] = 'rgb'
+            response['colorModel'] = 'hsv'
 
         if features & light.SUPPORT_COLOR_TEMP:
             # Max Kelvin is Min Mireds K = 1000000 / mireds
             # Min Kevin is Max Mireds K = 1000000 / mireds
-            response['temperatureMaxK'] = \
+            response['colorTemperatureRange'] = {
+                'temperatureMaxK':
                 color_util.color_temperature_mired_to_kelvin(
-                    attrs.get(light.ATTR_MIN_MIREDS))
-            response['temperatureMinK'] = \
+                    attrs.get(light.ATTR_MIN_MIREDS)),
+                'temperatureMinK':
                 color_util.color_temperature_mired_to_kelvin(
-                    attrs.get(light.ATTR_MAX_MIREDS))
+                    attrs.get(light.ATTR_MAX_MIREDS)),
+            }
 
         return response
 
@@ -321,12 +333,13 @@ class ColorSettingTrait(_Trait):
 
         if features & light.SUPPORT_COLOR:
             color_hs = self.state.attributes.get(light.ATTR_HS_COLOR)
+            brightness = self.state.attributes.get(light.ATTR_BRIGHTNESS, 1)
             if color_hs is not None:
-                color['spectrumRGB'] = int(
-                    color_util.color_rgb_to_hex(
-                        *color_util.color_hs_to_RGB(*color_hs)),
-                    16
-                )
+                color['spectrumHsv'] = {
+                    'hue': color_hs[0],
+                    'saturation': color_hs[1]/100,
+                    'value': brightness/255,
+                }
 
         if features & light.SUPPORT_COLOR_TEMP:
             temp = self.state.attributes.get(light.ATTR_COLOR_TEMP)
@@ -335,7 +348,7 @@ class ColorSettingTrait(_Trait):
                 _LOGGER.warning('Entity %s has incorrect color temperature %s',
                                 self.state.entity_id, temp)
             elif temp is not None:
-                color['temperature'] = \
+                color['temperatureK'] = \
                     color_util.color_temperature_mired_to_kelvin(temp)
 
         response = {}
@@ -345,7 +358,7 @@ class ColorSettingTrait(_Trait):
 
         return response
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute a color temperature command."""
         if 'temperature' in params['color']:
             temp = color_util.color_temperature_kelvin_to_mired(
@@ -377,6 +390,18 @@ class ColorSettingTrait(_Trait):
                     light.ATTR_HS_COLOR: color
                 }, blocking=True, context=data.context)
 
+        elif 'spectrumHSV' in params['color']:
+            color = params['color']['spectrumHSV']
+            saturation = color['saturation'] * 100
+            brightness = color['value'] * 255
+
+            await self.hass.services.async_call(
+                light.DOMAIN, SERVICE_TURN_ON, {
+                    ATTR_ENTITY_ID: self.state.entity_id,
+                    light.ATTR_HS_COLOR: [color['hue'], saturation],
+                    light.ATTR_BRIGHTNESS: brightness
+                }, blocking=True, context=data.context)
+
 
 @register_trait
 class SceneTrait(_Trait):
@@ -404,7 +429,7 @@ class SceneTrait(_Trait):
         """Return scene query attributes."""
         return {}
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute a scene command."""
         # Don't block for scripts as they can be slow.
         await self.hass.services.async_call(
@@ -439,7 +464,7 @@ class DockTrait(_Trait):
         """Return dock query attributes."""
         return {'isDocked': self.state.state == vacuum.STATE_DOCKED}
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute a dock command."""
         await self.hass.services.async_call(
             self.state.domain, vacuum.SERVICE_RETURN_TO_BASE, {
@@ -478,7 +503,7 @@ class StartStopTrait(_Trait):
             'isPaused': self.state.state == vacuum.STATE_PAUSED,
         }
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute a StartStop command."""
         if command == COMMAND_STARTSTOP:
             if params['start']:
@@ -614,7 +639,7 @@ class TemperatureSettingTrait(_Trait):
 
         return response
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute a temperature point or mode command."""
         # All sent in temperatures are always in Celsius
         unit = self.hass.config.units.temperature_unit
@@ -728,13 +753,10 @@ class LockUnlockTrait(_Trait):
         """Return LockUnlock query attributes."""
         return {'isLocked': self.state.state == STATE_LOCKED}
 
-    def can_execute(self, command, params):
-        """Test if command can be executed."""
-        allowed_unlock = not params['lock'] and self.config.allow_unlock
-        return params['lock'] or allowed_unlock
-
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute an LockUnlock command."""
+        _verify_pin_challenge(data, challenge)
+
         if params['lock']:
             service = lock.SERVICE_LOCK
         else:
@@ -812,7 +834,7 @@ class FanSpeedTrait(_Trait):
 
         return response
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute an SetFanSpeed command."""
         await self.hass.services.async_call(
             fan.DOMAIN, fan.SERVICE_SET_SPEED, {
@@ -986,7 +1008,7 @@ class ModesTrait(_Trait):
 
         return response
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute an SetModes command."""
         settings = params.get('updateModeSettings')
         requested_source = settings.get(
@@ -1049,18 +1071,25 @@ class OpenCloseTrait(_Trait):
             # Google will not issue an open command if the assumed state is
             # open, even if that is currently incorrect.
             if self.state.attributes.get(ATTR_ASSUMED_STATE):
-                response['openPercent'] = 50
-            else:
-                position = self.state.attributes.get(
-                    cover.ATTR_CURRENT_POSITION
-                )
+                raise SmartHomeError(
+                    ERR_NOT_SUPPORTED,
+                    'Querying state is not supported')
 
-                if position is not None:
-                    response['openPercent'] = position
-                elif self.state.state != cover.STATE_CLOSED:
-                    response['openPercent'] = 100
-                else:
-                    response['openPercent'] = 0
+            if self.state.state == STATE_UNKNOWN:
+                raise SmartHomeError(
+                    ERR_NOT_SUPPORTED,
+                    'Querying state is not supported')
+
+            position = self.state.attributes.get(
+                cover.ATTR_CURRENT_POSITION
+            )
+
+            if position is not None:
+                response['openPercent'] = position
+            elif self.state.state != cover.STATE_CLOSED:
+                response['openPercent'] = 100
+            else:
+                response['openPercent'] = 0
 
         elif domain == binary_sensor.DOMAIN:
             if self.state.state == STATE_ON:
@@ -1070,28 +1099,55 @@ class OpenCloseTrait(_Trait):
 
         return response
 
-    async def execute(self, command, data, params):
+    async def execute(self, command, data, params, challenge):
         """Execute an Open, close, Set position command."""
         domain = self.state.domain
 
         if domain == cover.DOMAIN:
+            if self.state.attributes.get(ATTR_DEVICE_CLASS) in (
+                    cover.DEVICE_CLASS_DOOR, cover.DEVICE_CLASS_GARAGE
+            ):
+                _verify_pin_challenge(data, challenge)
+
             position = self.state.attributes.get(cover.ATTR_CURRENT_POSITION)
-            if position is not None:
+            if params['openPercent'] == 0:
+                await self.hass.services.async_call(
+                    cover.DOMAIN, cover.SERVICE_CLOSE_COVER, {
+                        ATTR_ENTITY_ID: self.state.entity_id
+                    }, blocking=True, context=data.context)
+            elif params['openPercent'] == 100:
+                await self.hass.services.async_call(
+                    cover.DOMAIN, cover.SERVICE_OPEN_COVER, {
+                        ATTR_ENTITY_ID: self.state.entity_id
+                    }, blocking=True, context=data.context)
+            elif position is not None:
                 await self.hass.services.async_call(
                     cover.DOMAIN, cover.SERVICE_SET_COVER_POSITION, {
                         ATTR_ENTITY_ID: self.state.entity_id,
                         cover.ATTR_POSITION: params['openPercent']
                     }, blocking=True, context=data.context)
             else:
-                if self.state.state != cover.STATE_CLOSED:
-                    if params['openPercent'] < 100:
-                        await self.hass.services.async_call(
-                            cover.DOMAIN, cover.SERVICE_CLOSE_COVER, {
-                                ATTR_ENTITY_ID: self.state.entity_id
-                            }, blocking=True, context=data.context)
-                else:
-                    if params['openPercent'] > 0:
-                        await self.hass.services.async_call(
-                            cover.DOMAIN, cover.SERVICE_OPEN_COVER, {
-                                ATTR_ENTITY_ID: self.state.entity_id
-                            }, blocking=True, context=data.context)
+                raise SmartHomeError(
+                    ERR_FUNCTION_NOT_SUPPORTED,
+                    'Setting a position is not supported')
+
+
+def _verify_pin_challenge(data, challenge):
+    """Verify a pin challenge."""
+    if not data.config.secure_devices_pin:
+        raise SmartHomeError(
+            ERR_CHALLENGE_NOT_SETUP, 'Challenge is not set up')
+
+    if not challenge:
+        raise ChallengeNeeded(CHALLENGE_PIN_NEEDED)
+
+    pin = challenge.get('pin')
+
+    if pin != data.config.secure_devices_pin:
+        raise ChallengeNeeded(CHALLENGE_FAILED_PIN_NEEDED)
+
+
+def _verify_ack_challenge(data, challenge):
+    """Verify a pin challenge."""
+    if not challenge or not challenge.get('ack'):
+        raise ChallengeNeeded(CHALLENGE_ACK_NEEDED)
