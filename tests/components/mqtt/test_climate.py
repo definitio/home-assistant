@@ -39,7 +39,8 @@ DEFAULT_CONFIG = {
         'swing_mode_command_topic': 'swing-mode-topic',
         'away_mode_command_topic': 'away-mode-topic',
         'hold_command_topic': 'hold-topic',
-        'aux_command_topic': 'aux-topic'
+        'aux_command_topic': 'aux-topic',
+        'device_state_topic': 'device-state-topic'
     }}
 
 
@@ -172,6 +173,27 @@ async def test_set_operation_with_power_command(hass, mqtt_mock):
     ])
     mqtt_mock.async_publish.reset_mock()
 
+async def test_set_operation_with_device_state(hass, mqtt_mock):
+    """Test setting of new operation mode and getting device state."""
+    config = copy.deepcopy(DEFAULT_CONFIG)
+    config['climate']['device_state_topic'] = 'device-state'
+    assert await async_setup_component(hass, CLIMATE_DOMAIN, config)
+
+    state = hass.states.get(ENTITY_CLIMATE)
+    assert state.attributes.get('operation_mode') == 'off'
+    assert state.state == 'off'
+    await common.async_set_operation_mode(hass, 'on', ENTITY_CLIMATE)
+    state = hass.states.get(ENTITY_CLIMATE)
+    assert state.attributes.get('operation_mode') == 'on'
+    assert state.state == 'on'
+
+    async_fire_mqtt_message(hass, 'device-state', 'OFF')
+    state = hass.states.get(ENTITY_CLIMATE)
+    assert state.state == 'off'
+
+    async_fire_mqtt_message(hass, 'device-state', 'ON')
+    state = hass.states.get(ENTITY_CLIMATE)
+    assert state.state == 'on'
 
 async def test_set_fan_mode_bad_attr(hass, mqtt_mock, caplog):
     """Test setting fan mode without required attribute."""
@@ -574,6 +596,7 @@ async def test_set_with_templates(hass, mqtt_mock, caplog):
     config['climate']['hold_state_topic'] = 'hold-state'
     config['climate']['aux_state_topic'] = 'aux-state'
     config['climate']['current_temperature_topic'] = 'current-temperature'
+    config['climate']['device_state_topic'] = 'device-state'
 
     assert await async_setup_component(hass, CLIMATE_DOMAIN, config)
 
@@ -648,6 +671,12 @@ async def test_set_with_templates(hass, mqtt_mock, caplog):
     async_fire_mqtt_message(hass, 'current-temperature', '"74656"')
     state = hass.states.get(ENTITY_CLIMATE)
     assert state.attributes.get('current_temperature') == 74656
+
+    # Device state
+    assert state.state == "cool"
+    async_fire_mqtt_message(hass, 'device-state', '"OFF"')
+    state = hass.states.get(ENTITY_CLIMATE)
+    assert state.state == "off"
 
 
 async def test_min_temp_custom(hass, mqtt_mock):

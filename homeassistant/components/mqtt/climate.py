@@ -41,6 +41,8 @@ CONF_AWAY_MODE_STATE_TEMPLATE = 'away_mode_state_template'
 CONF_AWAY_MODE_STATE_TOPIC = 'away_mode_state_topic'
 CONF_CURRENT_TEMP_TEMPLATE = 'current_temperature_template'
 CONF_CURRENT_TEMP_TOPIC = 'current_temperature_topic'
+CONF_DEVICE_STATE_TEMPLATE = 'device_state_template'
+CONF_DEVICE_STATE_TOPIC = 'device_state_topic'
 CONF_FAN_MODE_COMMAND_TOPIC = 'fan_mode_command_topic'
 CONF_FAN_MODE_LIST = 'fan_modes'
 CONF_FAN_MODE_STATE_TEMPLATE = 'fan_mode_state_template'
@@ -80,6 +82,7 @@ TEMPLATE_KEYS = (
     CONF_AUX_STATE_TEMPLATE,
     CONF_AWAY_MODE_STATE_TEMPLATE,
     CONF_CURRENT_TEMP_TEMPLATE,
+    CONF_DEVICE_STATE_TEMPLATE,
     CONF_FAN_MODE_STATE_TEMPLATE,
     CONF_HOLD_STATE_TEMPLATE,
     CONF_MODE_STATE_TEMPLATE,
@@ -96,6 +99,7 @@ TOPIC_KEYS = (
     CONF_AWAY_MODE_COMMAND_TOPIC,
     CONF_AWAY_MODE_STATE_TOPIC,
     CONF_CURRENT_TEMP_TOPIC,
+    CONF_DEVICE_STATE_TOPIC,
     CONF_FAN_MODE_COMMAND_TOPIC,
     CONF_FAN_MODE_STATE_TOPIC,
     CONF_HOLD_COMMAND_TOPIC,
@@ -125,6 +129,8 @@ PLATFORM_SCHEMA = SCHEMA_BASE.extend({
     vol.Optional(CONF_CURRENT_TEMP_TEMPLATE): cv.template,
     vol.Optional(CONF_CURRENT_TEMP_TOPIC): mqtt.valid_subscribe_topic,
     vol.Optional(CONF_DEVICE): mqtt.MQTT_ENTITY_DEVICE_INFO_SCHEMA,
+    vol.Optional(CONF_DEVICE_STATE_TEMPLATE): mqtt.valid_subscribe_topic,
+    vol.Optional(CONF_DEVICE_STATE_TOPIC): mqtt.valid_subscribe_topic,
     vol.Optional(CONF_FAN_MODE_COMMAND_TOPIC): mqtt.valid_publish_topic,
     vol.Optional(CONF_FAN_MODE_LIST,
                  default=[STATE_AUTO, SPEED_LOW,
@@ -220,6 +226,7 @@ class MqttClimate(MqttAttributes, MqttAvailability, MqttDiscoveryUpdate,
         self._current_swing_mode = None
         self._current_temp = None
         self._hold = None
+        self._is_on = None
         self._target_temp = None
         self._target_temp_high = None
         self._target_temp_low = None
@@ -280,6 +287,7 @@ class MqttClimate(MqttAttributes, MqttAvailability, MqttDiscoveryUpdate,
             self._current_operation = STATE_OFF
         self._away = False
         self._hold = None
+        self._is_on = None
         self._aux = False
 
         value_templates = {}
@@ -448,6 +456,15 @@ class MqttClimate(MqttAttributes, MqttAvailability, MqttDiscoveryUpdate,
         add_subscription(topics, CONF_HOLD_STATE_TOPIC,
                          handle_hold_mode_received)
 
+        @callback
+        def handle_device_state_received(msg):
+            """Handle receiving activity state via MQTT."""
+            handle_onoff_mode_received(
+                msg, CONF_DEVICE_STATE_TEMPLATE, '_is_on')
+
+        add_subscription(topics, CONF_DEVICE_STATE_TOPIC,
+                         handle_device_state_received)
+
         self._sub_state = await subscription.async_subscribe_topics(
             self.hass, self._sub_state,
             topics)
@@ -538,6 +555,11 @@ class MqttClimate(MqttAttributes, MqttAvailability, MqttDiscoveryUpdate,
     def fan_list(self):
         """Return the list of available fan modes."""
         return self._config[CONF_FAN_MODE_LIST]
+
+    @property
+    def is_on(self):
+        """Return true if on."""
+        return self._is_on
 
     def _publish(self, topic, payload):
         if self._topic[topic] is not None:
